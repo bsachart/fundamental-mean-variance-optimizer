@@ -114,9 +114,8 @@ if 'fundamentals' not in st.session_state:
 if 'aligned_tickers' not in st.session_state:
     st.session_state['aligned_tickers'] = None
 
-# Load data if uploaded or cached, but only if not already in session state (or if we want to overwrite)
-# Actually, we should allow overwriting if new files are uploaded.
-if price_file:
+# Load data from file ONLY if session_state is empty (preserves Forecast Editor edits)
+if price_file and st.session_state['prices'] is None:
     try:
         prices_raw = load_and_validate_prices(price_file)
         st.session_state['prices'] = prices_raw
@@ -124,7 +123,7 @@ if price_file:
     except Exception as e:
         st.error(f"Error processing price data: {e}")
 
-if fund_file:
+if fund_file and st.session_state['fundamentals'] is None:
     try:
         funds_raw = load_and_validate_fundamentals(fund_file)
         st.session_state['fundamentals'] = funds_raw
@@ -209,43 +208,122 @@ if st.session_state['prices'] is not None and st.session_state['fundamentals'] i
             years=investment_horizon,
         )
 
-        # --- Section 2: Fundamental Analysis ---
+        # --- Section 2: Fundamental Analysis (Editable) ---
         st.header("2. Fundamental Analysis")
         
-        # 5. Display Fundamentals
-        st.markdown("### Implied Returns")
-        
-        # Create a detailed view
-        # Start with the calculated CAGR
-        display_df = pd.DataFrame({"Implied CAGR": expected_returns}, index=tickers)
+        # Create editable DataFrame with fundamental inputs + calculated Implied CAGR
+        edit_df = funds_aligned[["Current Price", "Sales/Share", "Current Margin", "Target Margin", "Adjusted Growth Rate", "Exit PE"]].copy()
+        edit_df["Implied CAGR"] = expected_returns
         
         # Calculate Current PE if possible
         try:
             current_eps = funds_aligned["Sales/Share"] * funds_aligned["Current Margin"]
             current_pe = P0.values / current_eps.replace(0, np.nan)
-            display_df["Current PE"] = current_pe
+            edit_df["Current PE"] = current_pe
         except Exception:
-            pass 
-
-        # Add input parameters for context
-        display_df["Adj. Growth"] = funds_aligned["Adjusted Growth Rate"]
+            pass
         
-        # Removed optional columns as requested
+        # Column configuration for proper formatting and to disable Implied CAGR editing
+        column_config = {
+            "Current Price": st.column_config.NumberColumn("Current Price", format="$%.2f", help="Current stock price"),
+            "Sales/Share": st.column_config.NumberColumn("Sales/Share", format="$%.2f", help="Sales per share (TTM)"),
+            "Current Margin": st.column_config.NumberColumn("Current Margin", format="%.4f", min_value=-1.0, max_value=1.0, help="Current net profit margin (decimal)"),
+            "Target Margin": st.column_config.NumberColumn("Target Margin", format="%.4f", min_value=-1.0, max_value=1.0, help="Expected margin at exit (decimal)"),
+            "Adjusted Growth Rate": st.column_config.NumberColumn("Growth Rate", format="%.4f", min_value=-1.0, max_value=2.0, help="Annual sales growth rate (decimal)"),
+            "Exit PE": st.column_config.NumberColumn("Exit PE", format="%.1f", min_value=0, help="Expected P/E ratio at exit"),
+            "Implied CAGR": st.column_config.NumberColumn("Implied CAGR", format="%.4f", disabled=True, help="Calculated implied return (not editable)"),
+            "Current PE": st.column_config.NumberColumn("Current PE", format="%.1f", disabled=True, help="Current P/E ratio (calculated)"),
+        }
         
-        display_df["Current Margin"] = funds_aligned["Current Margin"]
-        display_df[f"Target Margin (Yr {investment_horizon})"] = funds_aligned["Target Margin"]
-        display_df[f"Exit PE (Yr {investment_horizon})"] = funds_aligned["Exit PE"]
-
-        # Transpose for better readability if many columns
-        pe_cols = ["Current PE", f"Exit PE (Yr {investment_horizon})"]
-        pct_cols = display_df.columns.difference(pe_cols)
+        # Compact header with sort control
+        cols = st.columns([3, 1])
+        with cols[0]:
+            st.markdown("### Edit Assumptions")
+        with cols[1]:
+            sort_options = ["↓ Ticker", "↑ Ticker"] + [f"↓ {col}" for col in edit_df.columns] + [f"↑ {col}" for col in edit_df.columns]
+            sort_by = st.selectbox("Sort", sort_options, label_visibility="collapsed")
         
-        st.dataframe(
-            display_df.T.style.format("{:.2%}", subset=pd.IndexSlice[pct_cols, :])
-            .format("{:.1f}", subset=pd.IndexSlice[pe_cols, :], na_rep="-")
-            .background_gradient(cmap="RdYlGn", subset=pd.IndexSlice["Implied CAGR", :], vmin=-0.1, vmax=0.3),
-            width="stretch"
+        # Apply sorting (↓ = ascending/A→Z, ↑ = descending/Z→A)
+        if sort_by == "↓ Ticker":
+            edit_df = edit_df.sort_index(ascending=True)
+        elif sort_by == "↑ Ticker":
+            edit_df = edit_df.sort_index(ascending=False)
+        elif sort_by.startswith("↓ "):
+            col_name = sort_by[2:]
+            if col_name in edit_df.columns:
+                edit_df = edit_df.sort_values(by=col_name, ascending=True)
+        elif sort_by.startswith("↑ "):
+            col_name = sort_by[2:]
+            if col_name in edit_df.columns:
+                edit_df = edit_df.sort_values(by=col_name, ascending=False)
+        
+        edited_df = st.data_editor(
+            edit_df,
+            column_config=column_config,
+            use_container_width=True,
+            key="fundamentals_editor"
         )
+        
+        # Sync edits back to session state (update the original fundamentals)
+        editable_cols = ["Current Price", "Sales/Share", "Current Margin", "Target Margin", "Adjusted Growth Rate", "Exit PE"]
+        original_vals = funds_aligned[editable_cols]
+        edited_vals = edited_df[editable_cols]
+        
+        if not original_vals.equals(edited_vals):
+            # Update session state fundamentals with edited values
+            for col in editable_cols:
+                st.session_state['fundamentals'].loc[edited_df.index, col] = edited_df[col]
+            st.toast("Changes saved! Re-run optimization to apply.", icon="✅")
+            st.rerun()
+        
+        # Export functionality
+        from datetime import datetime
+        
+        def convert_df_to_csv(df: pd.DataFrame) -> bytes:
+            return df.to_csv().encode('utf-8')
+        
+        csv_data = convert_df_to_csv(edited_df)
+        filename = f"fundamentals_{datetime.now().strftime('%Y%m%d_%H%M')}.csv"
+        
+        st.download_button(
+            label="📥 Export CSV",
+            data=csv_data,
+            file_name=filename,
+            mime="text/csv",
+            help="Download your forecasts"
+        )
+        
+        # Margin Interpolation Display
+        with st.expander("📈 Margin Trajectory (Linear Interpolation)", expanded=False):
+            st.caption(f"Shows the assumed linear progression from Current Margin to Target Margin over {investment_horizon} years.")
+            
+            # Create interpolation data
+            years = list(range(investment_horizon + 1))
+            margin_data = []
+            
+            for ticker in edited_df.index:
+                current = edited_df.loc[ticker, "Current Margin"]
+                target = edited_df.loc[ticker, "Target Margin"]
+                for year in years:
+                    # Linear interpolation: M_t = M_0 + (M_N - M_0) * (t / N)
+                    margin_t = current + (target - current) * (year / investment_horizon)
+                    margin_data.append({"Ticker": ticker, "Year": year, "Margin": margin_t})
+            
+            margin_df = pd.DataFrame(margin_data)
+            
+            # Create chart
+            margin_chart = alt.Chart(margin_df).mark_line(point=True).encode(
+                x=alt.X("Year:O", title="Year", axis=alt.Axis(labelAngle=0)),
+                y=alt.Y("Margin:Q", title="Net Margin", axis=alt.Axis(format=".1%")),
+                color="Ticker:N",
+                tooltip=[
+                    "Ticker",
+                    "Year",
+                    alt.Tooltip("Margin:Q", format=".2%", title="Net Margin")
+                ]
+            ).properties(height=300).interactive()
+            
+            st.altair_chart(margin_chart, use_container_width=True)
 
         # 5. Optimize
         if st.button("Run Optimization"):
