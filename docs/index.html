@@ -1,33 +1,119 @@
 <!DOCTYPE html>
 <html>
+
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Quantamental Portfolio Optimizer</title>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@stlite/mountable@0.68.1/build/stlite.css" />
+  <script src="https://cdn.jsdelivr.net/npm/@anthropic-ai/sdk@latest"></script>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      margin: 0;
+      padding: 40px;
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+      min-height: 100vh;
+      color: #fff;
+    }
+
+    .container {
+      max-width: 800px;
+      margin: 0 auto;
+    }
+
+    h1 {
+      font-size: 2.5rem;
+      margin-bottom: 0.5rem;
+    }
+
+    .subtitle {
+      color: #8892b0;
+      font-size: 1.2rem;
+      margin-bottom: 2rem;
+    }
+
+    .card {
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 12px;
+      padding: 24px;
+      margin-bottom: 20px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .card h2 {
+      margin-top: 0;
+      color: #64ffda;
+    }
+
+    .feature {
+      display: flex;
+      align-items: center;
+      margin: 12px 0;
+    }
+
+    .feature::before {
+      content: "✓";
+      color: #64ffda;
+      margin-right: 12px;
+      font-weight: bold;
+    }
+
+    code {
+      background: rgba(255, 255, 255, 0.1);
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-family: 'Monaco', monospace;
+    }
+
+    .btn {
+      display: inline-block;
+      background: #64ffda;
+      color: #1a1a2e;
+      padding: 12px 24px;
+      border-radius: 8px;
+      text-decoration: none;
+      font-weight: 600;
+      margin-right: 12px;
+      margin-top: 12px;
+    }
+
+    .btn:hover {
+      background: #4de8c2;
+    }
+
+    .btn-outline {
+      background: transparent;
+      border: 2px solid #64ffda;
+      color: #64ffda;
+    }
+  </style>
 </head>
+
 <body>
-  <div id="root"></div>
-  <script src="https://cdn.jsdelivr.net/npm/@stlite/mountable@0.68.1/build/stlite.js"></script>
-  <script>
-    stlite.mount({
-      requirements: ["pandas", "numpy", "scipy", "altair"],
-      entrypoint: "app.py",
-      files: {
-        "app.py": `
-import streamlit as st
-st.set_page_config(page_title="Quantamental Optimizer", layout="wide")
-st.title("Quantamental Portfolio Optimizer")
-st.info("This is a demo. For full features, run locally with: streamlit run src/ui/0_Portfolio_Optimizer.py")
-st.markdown("## Features")
-st.markdown("- **Fundamental-driven returns** using implied CAGR")
-st.markdown("- **Mean-Variance Optimization** with Sharpe maximization")  
-st.markdown("- **Efficient Frontier** visualization")
-st.markdown("---")
-st.markdown("[View source on GitHub](https://github.com/bsachart/fundamental-mean-variance-optimizer)")
-        `
-      }
-    }, document.getElementById("root"));
-  </script>
+  <div class="container">
+    <h1>📊 Quantamental Portfolio Optimizer</h1>
+    <p class="subtitle">Mean-Variance Optimization with Fundamental-Driven Returns</p>
+
+    <div class="card">
+      <h2>Features</h2>
+      <div class="feature">Fundamental-driven returns using Implied CAGR</div>
+      <div class="feature">Mean-Variance Optimization (Sharpe Maximization)</div>
+      <div class="feature">Interactive Efficient Frontier visualization</div>
+      <div class="feature">Forecast Editor for scenario analysis</div>
+      <div class="feature">CSV export for your edited assumptions</div>
+    </div>
+
+    <div class="card">
+      <h2>Run Locally</h2>
+      <p>Clone and run with Python 3.10+:</p>
+      <pre><code>git clone https://github.com/bsachart/fundamental-mean-variance-optimizer.git
+cd fundamental-mean-variance-optimizer
+pip install -r requirements.txt
+streamlit run src/ui/0_Portfolio_Optimizer.py</code></pre>
+    </div>
+
+    <a href="https://github.com/bsachart/fundamental-mean-variance-optimizer" class="btn">View on GitHub</a>
+  </div>
 </body>
+
 </html>
