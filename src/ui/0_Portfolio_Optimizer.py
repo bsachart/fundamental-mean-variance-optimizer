@@ -33,7 +33,7 @@ from streamlit_local_storage import LocalStorage
 st.set_page_config(page_title="Quantamental Optimizer", layout="wide")
 
 st.title("Quantamental Portfolio Optimizer")
-st.markdown("""
+st.markdown(r"""
 **Philosophy:**
 *   **Returns ($\mu$):** Derived from *Fundamentals* (Implied CAGR).
 *   **Risk ($\Sigma$):** Derived from *Market History* (Covariance).
