@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Quantamental Portfolio Optimizer</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@stlite/mountable@0.68.1/build/stlite.css" />
+</head>
+<body>
+  <div id="root"></div>
+  <script src="https://cdn.jsdelivr.net/npm/@stlite/mountable@0.68.1/build/stlite.js"></script>
+  <script>
+    stlite.mount({
+      requirements: ["pandas", "numpy", "scipy", "altair"],
+      entrypoint: "app.py",
+      files: {
+        "app.py": `
+import streamlit as st
+st.set_page_config(page_title="Quantamental Optimizer", layout="wide")
+st.title("Quantamental Portfolio Optimizer")
+st.info("This is a demo. For full features, run locally with: streamlit run src/ui/0_Portfolio_Optimizer.py")
+st.markdown("## Features")
+st.markdown("- **Fundamental-driven returns** using implied CAGR")
+st.markdown("- **Mean-Variance Optimization** with Sharpe maximization")  
+st.markdown("- **Efficient Frontier** visualization")
+st.markdown("---")
+st.markdown("[View source on GitHub](https://github.com/bsachart/fundamental-mean-variance-optimizer)")
+        `
+      }
+    }, document.getElementById("root"));
+  </script>
+</body>
+</html>
