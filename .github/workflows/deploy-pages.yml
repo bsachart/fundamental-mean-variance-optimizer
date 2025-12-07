@@ -21,19 +21,52 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          python-version: '3.11'
+          node-version: '20'
 
       - name: Install stlite
-        run: pip install stlite
+        run: npm install -g @stlite/desktop
 
-      - name: Build static site with stlite
+      - name: Create stlite HTML bundle
         run: |
-          stlite build src/ui/0_Portfolio_Optimizer.py \
-            --requirements requirements.txt \
-            --output dist
+          mkdir -p dist
+          cat > dist/index.html << 'EOF'
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <meta charset="UTF-8" />
+            <meta name="viewport" content="width=device-width, initial-scale=1" />
+            <title>Quantamental Portfolio Optimizer</title>
+            <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@stlite/mountable@0.68.1/build/stlite.css" />
+          </head>
+          <body>
+            <div id="root"></div>
+            <script src="https://cdn.jsdelivr.net/npm/@stlite/mountable@0.68.1/build/stlite.js"></script>
+            <script>
+              stlite.mount({
+                requirements: ["pandas", "numpy", "scipy", "altair"],
+                entrypoint: "app.py",
+                files: {
+                  "app.py": `
+          import streamlit as st
+          st.set_page_config(page_title="Quantamental Optimizer", layout="wide")
+          st.title("Quantamental Portfolio Optimizer")
+          st.info("This is a demo version. For full functionality, run locally with: streamlit run src/ui/0_Portfolio_Optimizer.py")
+          st.markdown("## Features")
+          st.markdown("- **Fundamental-driven returns** using implied CAGR")
+          st.markdown("- **Mean-Variance Optimization** with Sharpe maximization")
+          st.markdown("- **Efficient Frontier** visualization")
+          st.markdown("---")
+          st.markdown("[View source on GitHub](https://github.com/bsachart/fundamental-mean-variance-optimizer)")
+                  `
+                }
+              }, document.getElementById("root"));
+            </script>
+          </body>
+          </html>
+          EOF
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
