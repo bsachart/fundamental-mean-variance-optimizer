@@ -35,6 +35,7 @@ def plot_efficient_frontier(
     tickers: List[str],
     asset_returns: npt.NDArray[np.float64],
     asset_vols: npt.NDArray[np.float64],
+    rf_rate: float = 0.0
 ) -> alt.VConcatChart:
     """
     Generates the combined Efficient Frontier and Asset Allocation chart.
@@ -46,6 +47,7 @@ def plot_efficient_frontier(
         tickers: List of asset ticker symbols.
         asset_returns: Array of expected returns for each asset.
         asset_vols: Array of volatilities for each asset.
+        rf_rate: Risk-free rate for the Capital Market Line.
 
     Returns:
         An Altair VConcatChart containing both plots.
@@ -125,10 +127,14 @@ def plot_efficient_frontier(
 
     # Chart 1: Efficient Frontier
 
-    # A. Feasible Set (Cloud)
-    cloud_chart = alt.Chart(random_df).mark_circle(size=40, color='gray', opacity=0.3).encode(
-        x=alt.X('Volatility:Q', axis=alt.Axis(format='%', title='Volatility (Risk)', **axis_config)),
-        y=alt.Y('Return:Q', axis=alt.Axis(format='%', title='Expected Return', **axis_config)),
+    # A. Feasible Set (Cloud) - Reduce opacity further for contrast
+    cloud_chart = alt.Chart(random_df).mark_circle(size=30, color='gray', opacity=0.15).encode(
+        x=alt.X('Volatility:Q', 
+                scale=alt.Scale(zero=False, padding=20),
+                axis=alt.Axis(format='%', title='Volatility (Risk)', **axis_config)),
+        y=alt.Y('Return:Q', 
+                scale=alt.Scale(zero=False, padding=20),
+                axis=alt.Axis(format='%', title='Expected Return', **axis_config)),
         tooltip=[
             alt.Tooltip('Return:Q', format='.2%'),
             alt.Tooltip('Volatility:Q', format='.2%'), 
@@ -136,8 +142,8 @@ def plot_efficient_frontier(
         ]
     )
     
-    # B. Frontier Line
-    frontier_chart = alt.Chart(frontier_df).mark_line(color='#00E676', size=4).encode(
+    # B. Frontier Line - Use a more vibrant color and thicker line
+    frontier_chart = alt.Chart(frontier_df).mark_line(color='#00E676', size=5).encode(
         x='Volatility:Q',
         y='Return:Q',
         tooltip=[
@@ -163,7 +169,14 @@ def plot_efficient_frontier(
     )
     
     # D. Optimal Portfolio
-    optimal_chart = alt.Chart(optimal_df).mark_point(shape='diamond', size=300, filled=True).encode(
+    optimal_df = pd.DataFrame([optimal_portfolio])
+    optimal_df['Type'] = 'Optimal Portfolio'
+    # For tooltips
+    weights_dict = optimal_portfolio['weights']
+    top_holdings = ", ".join([f"{t}: {weights_dict[i]:.1%}" for i, t in enumerate(tickers) if abs(weights_dict[i]) > 0.01])
+    optimal_df['Top Holdings'] = top_holdings
+
+    optimal_chart = alt.Chart(optimal_df).mark_point(shape='diamond', size=400, filled=True).encode(
         x='Volatility:Q',
         y='Return:Q',
         color=alt.value('#FF5252'),
@@ -175,44 +188,26 @@ def plot_efficient_frontier(
         ]
     )
     
-    frontier_combined = (cloud_chart + frontier_chart + assets_layer + optimal_chart).properties(
+    # E. Capital Market Line (CML)
+    # Line from (0, rf) through Optimal Portfolio
+    cml_data = pd.DataFrame([
+        {"Volatility": 0, "Return": rf_rate, "Type": "Risk-Free"},
+        {"Volatility": optimal_portfolio["volatility"], "Return": optimal_portfolio["return"], "Type": "Tangency Portfolio"},
+        # Extend slightly further
+        {"Volatility": optimal_portfolio["volatility"] * 1.5, "Return": rf_rate + 1.5 * (optimal_portfolio["return"] - rf_rate), "Type": "Extension"}
+    ])
+    
+    cml_line = alt.Chart(cml_data).mark_line(color='#FFD54F', strokeDash=[5, 5], size=2).encode(
+        x='Volatility:Q',
+        y='Return:Q'
+    )
+    
+    frontier_combined = (cloud_chart + cml_line + frontier_chart + assets_layer + optimal_chart).properties(
+        width='container',
         height=500,
-        title=alt.TitleParams(text='Efficient Frontier', fontSize=18)
+        title=alt.TitleParams(text='Efficient Frontier & Feasible Set', fontSize=20, anchor='start')
+    ).interactive().configure_view(
+        strokeOpacity=0
     )
     
-    # Chart 2: Transition Map (Asset Allocation)
-    
-    nearest = alt.selection_point(nearest=True, on='mouseover', fields=['Volatility'], empty=False)
-
-    base = alt.Chart(transition_df).encode(
-        x=alt.X('Volatility:Q', axis=alt.Axis(format='%', title='Volatility (Risk)', **axis_config))
-    )
-
-    area = base.mark_area().encode(
-        y=alt.Y('Weight:Q', stack='normalize', axis=alt.Axis(format='%', title='Allocation', **axis_config)),
-        color=alt.Color('Ticker:N', legend=alt.Legend(orient='bottom', columns=8, title=None, labelFontSize=12, symbolSize=150)),
-        tooltip=[
-            'Ticker',
-            alt.Tooltip('Weight:Q', format='.2%'),
-            alt.Tooltip('Return:Q', format='.2%'),
-            alt.Tooltip('Composition:N', title='Full Portfolio')
-        ]
-    )
-
-    rule = base.mark_rule(color='white', strokeWidth=2).encode(
-        opacity=alt.condition(nearest, alt.value(1), alt.value(0)),
-        tooltip=[
-            alt.Tooltip('Return:Q', format='.2%'),
-            alt.Tooltip('Volatility:Q', format='.2%'),
-            alt.Tooltip('Composition:N', title='Full Portfolio')
-        ]
-    ).add_params(nearest)
-
-    transition_chart = (area + rule).properties(
-        height=350,
-        title=alt.TitleParams(text="Asset Allocation vs. Risk", fontSize=18)
-    )
-    
-    combined_chart = alt.vconcat(frontier_combined, transition_chart).resolve_scale(x='shared')
-    
-    return combined_chart
+    return frontier_combined

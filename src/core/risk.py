@@ -1,19 +1,16 @@
 """
-Module for calculating Risk (Covariance) from historical price data.
+Module for calculating Risk (Covariance) from historical price data and implied volatility.
 
 Philosophy:
-    - While we use fundamentals for returns, we trust the market for risk.
-    - Historical price covariance is the best proxy for near-term correlations.
-    - "Garbage in, garbage out": We must ensure proper annualization of the covariance matrix.
-
-Reference:
-    - "A Philosophy of Software Design": Define errors out of existence (e.g. by enforcing frequency inputs).
+    - Standard historical covariance is the base for correlation structure.
+    - Implied Volatility (IV) provides forward-looking risk scaling.
+    - We blend IV and historical vol to reduce "noise" while staying reactive.
 """
 
 import numpy as np
 import pandas as pd
 import numpy.typing as npt
-from typing import Literal
+from typing import Literal, Union, Optional
 
 # Type alias for supported frequencies
 Frequency = Literal["daily", "weekly", "monthly"]
@@ -25,73 +22,70 @@ def calculate_covariance_matrix(
     prices: pd.DataFrame, frequency: Frequency = "monthly"
 ) -> pd.DataFrame:
     """
-    Calculates the annualized covariance matrix from historical prices.
-
-    Steps:
-    1. Computes log returns: ln(P_t / P_{t-1}).
-       Log returns are preferred for time-series aggregation and statistical properties.
-    2. Computes the sample covariance matrix of these returns.
-    3. Annualizes the matrix by multiplying by the frequency factor (e.g., 12 for monthly).
-
-    Args:
-        prices: A DataFrame where index is Datetime and columns are Tickers.
-                Values are adjusted closing prices.
-        frequency: The sampling frequency of the data ('daily', 'weekly', 'monthly').
-                   Defaults to 'monthly'.
-
-    Returns:
-        A DataFrame representing the annualized covariance matrix (N x N).
-
-    Raises:
-        ValueError: If `prices` is empty or has fewer than 2 rows.
-        ValueError: If `frequency` is invalid.
+    Calculates the annualized historical covariance matrix.
     """
     if prices.empty or len(prices) < 2:
-        raise ValueError(
-            "Price history must contain at least 2 data points to compute returns."
-        )
+        raise ValueError("Price history must contain at least 2 data points.")
 
     if frequency not in ANNUALIZATION_FACTORS:
-        raise ValueError(
-            f"Invalid frequency: {frequency}. Must be one of {list(ANNUALIZATION_FACTORS.keys())}"
-        )
+        raise ValueError(f"Invalid frequency: {frequency}")
 
-    # 1. Compute Log Returns
-    # We use log returns: r_t = ln(P_t) - ln(P_{t-1})
-    # This is mathematically more robust than simple arithmetic returns for chaining,
-    # though for single-period MVO, arithmetic returns are often used.
-    # However, in continuous time finance, log returns are standard for covariance estimation.
-    # For small time steps (daily/weekly), log returns approx arithmetic returns.
-    log_returns = np.log(prices / prices.shift(1))
-
-    # Drop the first NaN row created by the shift
-    log_returns = log_returns.dropna()
+    # Compute Log Returns
+    log_returns = np.log(prices / prices.shift(1)).dropna()
 
     if log_returns.empty:
-        raise ValueError("Not enough data to compute covariance after dropping NaNs.")
+        raise ValueError("Not enough data to compute returns.")
 
-    # 2. Compute Sample Covariance
-    # ddof=1 for unbiased estimator (standard in pandas/numpy)
-    covariance = log_returns.cov()
-
-    # 3. Annualize
+    # Compute Sample Covariance and Annualize
     factor = ANNUALIZATION_FACTORS[frequency]
-    annualized_covariance = covariance * factor
+    return log_returns.cov() * factor
 
-    return annualized_covariance
+
+def calculate_hybrid_covariance(
+    prices: pd.DataFrame,
+    implied_vols: Union[npt.NDArray[np.float64], pd.Series],
+    anchor_vols: Optional[Union[float, npt.NDArray[np.float64], pd.Series]] = None,
+    w_iv: float = 0.5,
+    frequency: Frequency = "monthly"
+) -> pd.DataFrame:
+    """
+    Constructs a Hybrid Covariance Matrix by blending Forward-Looking IV 
+    with Historical Volatility, while preserving historical correlations.
+    
+    Logic:
+    1. Calculate historical covariance (Sigma_H).
+    2. Extract historical correlation matrix (R) and historical vols (sigma_H).
+    3. Blend vols: sigma_hybrid = w * IV + (1 - w) * sigma_H.
+    4. Reconstruct Sigma_hybrid = diag(sigma_hybrid) * R * diag(sigma_hybrid).
+    """
+    # 1. Base Historical Covariance
+    hist_cov = calculate_covariance_matrix(prices, frequency)
+    tickers = hist_cov.columns
+    
+    # 2. Extract Components
+    hist_vols = np.sqrt(np.diag(hist_cov))
+    # Correlation matrix R = D^-1 * Sigma * D^-1 where D = diag(sigma)
+    inv_vols = 1.0 / np.where(hist_vols == 0, 1e-8, hist_vols)
+    corr_matrix = np.diag(inv_vols) @ hist_cov.values @ np.diag(inv_vols)
+    
+    # 3. Blend Volatilities
+    ivs = np.asarray(implied_vols, dtype=np.float64)
+    if len(ivs) != len(hist_vols):
+        raise ValueError("Implied vols must match the number of assets.")
+    
+    # Use provided anchor (e.g. Market IV) or fallback to Hist Vol
+    vols_for_blending = anchor_vols if anchor_vols is not None else hist_vols
+    hybrid_vols = w_iv * ivs + (1.0 - w_iv) * vols_for_blending
+    
+    # 4. Reconstruct Covariance
+    hybrid_cov_values = np.diag(hybrid_vols) @ corr_matrix @ np.diag(hybrid_vols)
+    
+    return pd.DataFrame(hybrid_cov_values, index=tickers, columns=tickers)
 
 
 def calculate_correlation_matrix(prices: pd.DataFrame) -> pd.DataFrame:
     """
     Calculates the correlation matrix from historical prices.
-    Correlation is time-invariant (scale-free), so annualization is not needed.
-
-    Args:
-        prices: A DataFrame where index is Datetime and columns are Tickers.
-
-    Returns:
-        A DataFrame representing the correlation matrix (N x N).
     """
-    # Use log returns for consistency with covariance
     log_returns = np.log(prices / prices.shift(1)).dropna()
     return log_returns.corr()

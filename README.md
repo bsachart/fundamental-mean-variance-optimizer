@@ -1,91 +1,63 @@
-# Fundamental Mean-Variance Optimizer
+# Hybrid Quantamental Optimizer
 
-A "quantamental" portfolio construction tool that marries classic Mean-Variance Optimization (MVO) with forward-looking fundamental data.
+A portfolio construction tool designed to fix the "rear-view mirror" bias of Modern Portfolio Theory (MPT).
 
-Standard MPT is often broken because it drives forward-looking models using backward-looking return data. This tool fixes that by replacing historical average returns with a fundamentally derived **Implied Annual Return (CAGR)**, while keeping the empirically robust historical covariance matrix for risk management.
+Standard optimizers fail because they rely on historical averages for future returns and historical volatility for future risk. This project explicitly **decouples** the estimation of returns, the modeling of risk, and the mathematical optimization.
 
-It trusts **fundamentals** to tell us where prices will eventually go, and **market prices** to tell us how bumpy the ride will be.
-
----
-
-## Core Philosophy: The Hybrid Model
-
-We are building a "Fundamental Tie-Broken" optimizer. We use the best predictive source for each half of the MVO equation:
-
-| Component | Standard MPT Input | Our "Fundamental" Input | Why? |
-| :--- | :--- | :--- | :--- |
-| **Expected Return ($\mu$)** | Historical Average Returns | **Implied CAGR** | Past returns are terrible predictors of future performance. Fundamental growth and exit valuations are more reliable anchors of value. |
-| **Risk Matrix ($\Sigma$)** | Historical Price Covariance | **Historical Price Covariance** | Fundamentals don't capture daily market microstructure. Recent price history is the best proxy for near-term correlations and volatility. |
-
-### The Horizon Mismatch (Feature, not bug)
-You will notice a deliberate horizon mismatch in our inputs:
-*   **Returns ($\mu$)** are based on an $N$-year forward outlook (long-term destination).
-*   **Risk ($\Sigma$)** is based on an $M$-year historical lookback (short-term path variance).
-
-This is intentional. We want a portfolio deemed attractive over the long haul ($N$ years), but structured robustly enough to survive the near-term correlation shocks ($M$ years history) required to get there.
+This allows the user to inject **Forward-Looking** data—using Market Views for returns and Options Market pricing for risk—into a robust mathematical framework.
 
 ---
 
-## Methodology
+## The Core Philosophy: Decoupled Architecture
 
-### 1. The Fundamental Engine (Calculating $\mu$)
-We avoid the complexity of discounted cash flow (DCF) models which require guessing dividend payout ratios and tax rates. Instead, we use a **"Total Reinvestment"** model.
+The application is built on three independent engines.
 
-We assume all cash generated during the holding period is reinvested to fuel growth. Therefore, the investor's return comes entirely from the **Terminal Exit Value**.
+### 1. The Return Engine (Forecasting $\mu$)
+We do not rely on past price performance to predict future returns.
 
-For every asset, we simulate the P&L to find the Exit Price ($P_N$) and solve for the CAGR:
+#### Currently Supported: View-Based Alpha
+*   **Logic:** $\mu_{asset} = \mu_{market} + \delta_{alpha}$
+*   **Inputs:**
+    *   **Market Baseline:** The general expected return of the equity risk premium (e.g., 8%).
+    *   **Asset Delta:** User-defined "Alpha" views (e.g., "I expect NVDA to outperform the market by 5%").
+*   **Decoupled Mode:** Users can also provide raw Expected Returns directly, bypassing the View-Based logic.
 
-1.  **Forecast Sales ($S_t$):** Grow Sales per Share by the input growth rate $g$.
-2.  **Ramp Margins ($M_t$):** Linearly interpolate Net Margins from Current ($M_0$) to Target ($M_N$) to capture efficiency improvements.
-3.  **Determine Exit Price:** Apply a realistic Exit PE to the final year's earnings.
-    $$ P_N = (S_N \times M_N) \times PE_{\text{exit}} $$
-4.  **Solve for $\mu$:**
-    $$ \mu = \left( \frac{P_N}{P_0} \right)^{\frac{1}{N}} - 1 $$
+#### Fundamental Implied CAGR (In Development)
+Best for long-term fundamental investors. We derive an **Implied Annual Return** by simulating the business fundamentals over an $N$-year holding period.
+*   **Logic:** $ \mu = (P_{exit} / P_{current})^{1/N} - 1 $
+*   **Inputs:**
+    *   **Sales Growth:** Organic growth adjusted for buybacks/dilution.
+    *   **Margin Ramp:** Interpolation from current margins to target maturity margins.
+    *   **Exit Valuation:** A realistic Terminal P/E based on the company's maturity profile.
 
-### 2. The Risk Engine (Calculating $\Sigma$)
-We use standard historical price returns over a lookback window $M$.
-*   Compute log returns from monthly/weekly price data.
-*   Calculate the covariance matrix.
-*   **Crucial:** Annualize the matrix to match the time units of our annualized $\mu$.
+### 2. The Risk Engine (Forecasting $\Sigma$)
+Historical covariance is useful for correlation, but it is slow to react to changing volatility regimes. We use a **Hybrid Volatility** model that anchors risk to the options market.
 
-### 3. The Optimizer
-We feed $\mu$ and $\Sigma$ into a standard quadratic solver (`scipy.optimize`) to find the weight vector $\mathbf{w}$ that maximizes the Sharpe Ratio, subject to standard long-only constraints ($w_i \geq 0$).
+We construct the covariance matrix using a blend of **Implied Volatility (Forward-Looking)** and **Historical Volatility (Mean-Reverting)**, while preserving structural historical correlations.
+
+$$ \sigma_{forecast} = w \cdot IV_{current} + (1 - w) \cdot \sigma_{historical} $$
+
+*   **Implied Volatility (IV):** Derived from current option pricing.
+*   **Historical Correlation:** Used to determine how assets move relative to one another.
+
+### 3. The Optimization Engine (The Solver)
+Once $\mu$ (Returns) and $\Sigma$ (Risk) are calculated, they are passed to the solver. This engine is agnostic to *how* the inputs were generated; it cares only about the math.
+
+**Key Features:**
+*   **Asset-Specific Constraints:** Define directional limits per asset (Long/Short/Both).
+*   **Efficient Frontier Calculation:** Visualizes the Optimal Sharpe Ratio portfolio against the feasible region of random portfolios.
 
 ---
 
-## Implementation Details
+## Workflow
 
-### Tech Stack
-*   **Core Logic:** Python (NumPy/Pandas) for vectorized array operations.
-*   **Optimization:** `scipy.optimize` (SLSQP method).
-*   **Frontend:** Streamlit for rapid parameter adjustment.
+1.  **Configure Assets:** Select your universe and define directional constraints (Long/Short/Both).
+2.  **Generate Returns:** Use the *View-Based Model* (Market + Alpha) to populate the expected return vector.
+3.  **Calibrate Risk:** Ingest current Implied Volatility data to construct the Hybrid Covariance Matrix.
+4.  **Optimize:** The Streamlit interface solves for the Maximum Sharpe Ratio weights and visualizes the Efficient Frontier.
 
-### Input Engineering: The Guardrails
-MVO is notoriously sensitive to garbage inputs ("garbage in, hyper-leveraged garbage out"). Because our model is simple, the **inputs must be precise**.
+---
 
-We rely on **Input Engineering** to handle complex corporate actions (Dividends, Buybacks, Dilution) without complicating the math.
+## Disclaimer
 
-#### 1. The "Net Effective Growth" Rule
-Do not simply input the "Revenue Growth" rate. You must adjust $g$ to reflect the per-share reality:
-
-$$ g_{\text{input}} \approx g_{\text{organic}} + \text{Yield} + \text{Buybacks} - \text{Dilution} $$
-
-| Scenario | Organic Revenue Growth | Adjustments | **Input $g$** |
-| :--- | :--- | :--- | :--- |
-| **Cash Cow (Coke)** | 3% | +3% Div, +1% Buyback | **7%** |
-| **Tech Diluter (SaaS)** | 30% | -3% SBC Dilution | **27%** |
-| **Aggressive Cannibal** | 5% | +5% Buyback | **10%** |
-
-#### 2. The Terminal P/E Guardrails
-The Exit Price accounts for 100% of the return in this model. Small changes here create wild swings in $\mu$.
-**The Golden Rule:** You cannot have high Growth ($g$) AND a high Exit Multiple ($PE_{exit}$) simultaneously.
-*   *Why?* A high multiple implies the market expects *future* high growth after Year $N$. If the company is mature enough to be sold, its multiple should contract.
-
-| Scenario Preset | Assumption for Year $N$ | Recommended Exit PE |
-| :--- | :--- | :--- |
-| **"Distressed/Deep Value"** | Company is currently hated but will survive. | **8x - 10x** |
-| **"Mature Cash Cow"** | Zero growth, pure dividend play. | **12x - 15x** |
-| **"Standard Compounder"** | Good business, standard growth (10%). | **18x - 20x** |
-| **"Hyper Growth"** | *Danger Zone.* Cap this rigorously. | **Max 25x** |
-
-> **Warning:** If your calculated $\mu$ exceeds 25-30% for a large-cap stock, check your Exit PE. You are likely "Double Counting" (assuming high growth continues forever). **When in doubt, fade the multiple toward 20x.**
+*This tool is for educational and research purposes only. It does not constitute financial advice. The "View-Based Alpha" and "Hybrid Risk" models are theoretical frameworks and do not guarantee future performance.*

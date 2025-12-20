@@ -1,434 +1,374 @@
 """
-Streamlit UI for the Quantamental Portfolio Optimizer.
-
-Philosophy:
-    - "Incremental complexity": Simple default view, advanced options hidden.
-    - "Quantamental": clearly separate Fundamental inputs (Returns) from Market inputs (Risk).
+Streamlit UI for the Hybrid Quantamental Optimizer.
+Workflow:
+1. Configure Assets (Prices + Constraints)
+2. Generate Returns (Market + Alpha)
+3. Calibrate Risk (IV + Blending)
+4. Optimize
 """
 
 import streamlit as st
 import pandas as pd
 import numpy as np
-import altair as alt
 import sys
 import os
-import base64
-import io
 
-# Add project root to path to allow imports
-sys.path.append(os.getcwd())
+# Prioritize project root in path
+sys.path.insert(0, os.getcwd())
 
 from src.core.data import (
     load_and_validate_prices,
-    load_and_validate_fundamentals,
+    load_and_validate_asset_metrics,
     align_tickers,
     infer_frequency,
+    fetch_prices_from_yfinance,
 )
-from src.core.returns import calculate_implied_cagr
-from src.core.risk import calculate_covariance_matrix, calculate_correlation_matrix
+from src.core.returns import calculate_view_returns
+from src.core.risk import calculate_hybrid_covariance, calculate_covariance_matrix
 from src.optimization import optimizer
 from src.ui import charts
-from streamlit_local_storage import LocalStorage
 
-st.set_page_config(page_title="Quantamental Optimizer", layout="wide")
+st.set_page_config(page_title="Hybrid Optimizer", layout="wide", initial_sidebar_state="collapsed")
 
-st.title("Quantamental Portfolio Optimizer")
-st.markdown(r"""
-**Philosophy:**
-*   **Returns ($\mu$):** Derived from *Fundamentals* (Implied CAGR).
-*   **Risk ($\Sigma$):** Derived from *Market History* (Covariance).
-""")
+# --- Custom CSS for Premium Look ---
+st.markdown("""
+<style>
+    .block-container {
+        max-width: 1200px;
+        margin: 0 auto;
+        padding: 2rem 1rem;
+    }
+    h1 {
+        background: linear-gradient(90deg, #00C853, #00E5FF);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        font-weight: 800;
+    }
+</style>
+""", unsafe_allow_html=True)
 
-# --- Sidebar: Inputs ---
-# --- Persistence Setup (Client-Side LocalStorage) ---
-localS = LocalStorage()
+st.title("Hybrid Quantamental Optimizer")
+st.markdown("> *Modern Portfolio Theory evolved for the fundamental investor.*")
 
-def save_to_local_storage(key, uploaded_file):
-    """Save uploaded file to browser LocalStorage (Base64 encoded)."""
-    if uploaded_file is not None:
-        # Check size (LocalStorage limit is usually 5MB, base64 adds 33% overhead)
-        # Limit to ~3.5MB to be safe
-        if uploaded_file.size > 3.5 * 1024 * 1024:
-            st.sidebar.warning(f"File {uploaded_file.name} is too large for browser storage (>3.5MB). It will not be saved.")
-            return
-
-        bytes_data = uploaded_file.getvalue()
-        b64_str = base64.b64encode(bytes_data).decode()
-        # We must provide a unique key for the component instance to avoid StreamlitDuplicateElementKey
-        localS.setItem(key, b64_str, key=f"set_{key}")
-
-def load_from_local_storage(key, filename):
-    """Load file from LocalStorage and convert to BytesIO."""
-    b64_str = localS.getItem(key)
-    if b64_str:
-        try:
-            bytes_data = base64.b64decode(b64_str)
-            file_obj = io.BytesIO(bytes_data)
-            file_obj.name = filename # Pandas needs a name sometimes
-            return file_obj
-        except Exception as e:
-            st.sidebar.error(f"Failed to load {filename} from storage: {e}")
-    return None
-
-st.sidebar.header("1. Data Inputs")
-
-# Check for cached files in LocalStorage
-# Note: LocalStorage component might take a moment to sync on first load
-cached_price = load_from_local_storage("price_csv", "price_history.csv")
-cached_fund = load_from_local_storage("fund_csv", "fundamentals.csv")
-
-price_file = st.sidebar.file_uploader("Upload Price History (CSV)", type=["csv"])
-fund_file = st.sidebar.file_uploader("Upload Fundamentals (CSV)", type=["csv"])
-
-# Logic: Use uploaded file if present, else use cached file
-if price_file:
-    save_to_local_storage("price_csv", price_file)
-elif cached_price:
-    st.sidebar.info("Using cached prices from browser storage.")
-    price_file = cached_price
-
-if fund_file:
-    save_to_local_storage("fund_csv", fund_file)
-elif cached_fund:
-    st.sidebar.info("Using cached fundamentals from browser storage.")
-    fund_file = cached_fund
-
-if st.sidebar.button("Clear Browser Storage"):
-    localS.deleteAll()
-    st.rerun()
-
-st.sidebar.header("2. Optimization Parameters")
-investment_horizon = st.sidebar.slider("Investment Horizon (Years)", 1, 15, 5)
-risk_free_rate = (
-    st.sidebar.number_input("Risk Free Rate (%)", value=4.0, step=0.1) / 100.0
-)
-max_weight = st.sidebar.slider("Max Weight per Asset", 0.0, 1.0, 0.2, 0.05)
-
-# --- Main Area ---
-
-# Initialize session state for data if not present
+# --- Initialize Session State ---
 if 'prices' not in st.session_state:
     st.session_state['prices'] = None
-if 'fundamentals' not in st.session_state:
-    st.session_state['fundamentals'] = None
-if 'aligned_tickers' not in st.session_state:
-    st.session_state['aligned_tickers'] = None
+if 'metrics' not in st.session_state:
+    st.session_state['metrics'] = None
 
-# Load data from file ONLY if session_state is empty (preserves Forecast Editor edits)
-if price_file and st.session_state['prices'] is None:
-    try:
-        prices_raw = load_and_validate_prices(price_file)
-        st.session_state['prices'] = prices_raw
-        st.success(f"Loaded Price History for {len(prices_raw.columns)} assets.")
-    except Exception as e:
-        st.error(f"Error processing price data: {e}")
+# --- Step 1: Universe ---
+st.header("Step 1: Universe")
 
-if fund_file and st.session_state['fundamentals'] is None:
-    try:
-        funds_raw = load_and_validate_fundamentals(fund_file)
-        st.session_state['fundamentals'] = funds_raw
-    except Exception as e:
-        st.error(f"Error processing fundamental data: {e}")
+if st.session_state['prices'] is None:
+    st.info("👋 **Welcome!** Define your asset universe to begin.")
 
-# Process Data if available
-if st.session_state['prices'] is not None and st.session_state['fundamentals'] is not None:
-    try:
-        # Align Data
-        # We re-align every time to ensure consistency, or check if already aligned?
-        # Re-aligning is cheap enough.
-        prices_aligned, funds_aligned = align_tickers(st.session_state['prices'], st.session_state['fundamentals'])
-        tickers = prices_aligned.columns.tolist()
-        st.session_state['aligned_tickers'] = tickers
-        
-        # Update session state with aligned data so Editor sees the same set
-        # But wait, Editor might want to see all fundamentals? 
-        # Let's keep 'fundamentals' as the raw loaded data, and work with aligned here.
-        # Actually, for the Editor to be useful, it should edit the data that is used here.
-        # So we should probably update 'fundamentals' in session state to be the aligned version if we want strict consistency,
-        # OR just use the aligned version for calculations.
-        # Let's use the aligned version for calculations here.
+data_mode = st.radio("Data Entry Mode", ["Manual Ticker Entry", "Upload CSV"], horizontal=True)
 
-        st.success(
-            f"Aligned {len(tickers)} assets with Fundamentals: {', '.join(tickers)}"
-        )
-        
-        detected_freq = infer_frequency(prices_aligned)
-        cov_matrix = calculate_covariance_matrix(prices_aligned, frequency=detected_freq)
-        corr_matrix = calculate_correlation_matrix(prices_aligned)
-
-        # --- Section 1: Historical Analysis ---
-        with st.expander("Historical Analysis", expanded=False):
-            col_hist1, col_hist2 = st.columns(2)
-
-            with col_hist1:
-                st.subheader("Performance")
-                normalized_prices = ((prices_aligned / prices_aligned.iloc[0]) - 1) * 100
-                df_long = normalized_prices.reset_index().melt(
-                    "Date", var_name="Ticker", value_name="Return"
-                )
-                selection = alt.selection_point(fields=["Ticker"], bind="legend")
-                chart = (
-                    alt.Chart(df_long)
-                    .mark_line(point=True)
-                    .encode(
-                        x="Date:T",
-                        y=alt.Y("Return:Q", title="Return (%)"),
-                        color="Ticker:N",
-                        opacity=alt.condition(selection, alt.value(1), alt.value(0.2)),
-                        tooltip=["Date", "Ticker", alt.Tooltip("Return", format=".2f")],
-                    )
-                    .add_params(selection)
-                    .interactive()
-                )
-                st.altair_chart(chart, width="stretch")
-
-            with col_hist2:
-                st.subheader("Correlations")
-                st.dataframe(
-                    corr_matrix.style.background_gradient(
-                        cmap="coolwarm", vmin=-1, vmax=1
-                    ).format("{:.2f}"),
-                    width="stretch",
-                )
-
-        # 4. Calculate Returns (Implied CAGR)
-        if "Current Price" in funds_aligned.columns:
-            P0 = funds_aligned["Current Price"]
-        else:
-            P0 = prices_aligned.iloc[-1]
-
-        # Calculate CAGR for each asset (Vectorized)
-        expected_returns = calculate_implied_cagr(
-            current_price=P0.values,
-            sales_per_share=funds_aligned["Sales/Share"].values,
-            net_margin_current=funds_aligned["Current Margin"].values,
-            net_margin_target=funds_aligned["Target Margin"].values,
-            adjusted_growth_rate=funds_aligned["Adjusted Growth Rate"].values,
-            exit_pe=funds_aligned["Exit PE"].values,
-            years=investment_horizon,
-        )
-
-        # --- Section 2: Fundamental Analysis (Editable) ---
-        st.header("2. Fundamental Analysis")
-        
-        # Create editable DataFrame with fundamental inputs + calculated Implied CAGR
-        # Column order: Current state → Inputs → Calculated output
-        edit_df = funds_aligned[["Current Price", "Sales/Share", "Current Margin", "Target Margin", "Adjusted Growth Rate", "Exit PE"]].copy()
-        
-        # Calculate Current PE if possible (insert after Current Margin since it's derived from Price/Sales/Margin)
+if data_mode == "Manual Ticker Entry":
+    tickers_input = st.text_input("Enter Ticker Symbols (comma separated)", "AAPL, GOOG, MSFT, NVDA")
+    
+    c1, c2 = st.columns(2)
+    lookback_period = c1.selectbox("Lookback Period", ["1y", "2y", "5y", "10y"], index=1)
+    data_interval = c2.selectbox("Frequency", ["Daily", "Weekly", "Monthly"], index=2)
+    
+    interval_map = {"Daily": "1d", "Weekly": "1wk", "Monthly": "1mo"}
+    
+    if st.button("Fetch Market Data"):
         try:
-            current_eps = funds_aligned["Sales/Share"] * funds_aligned["Current Margin"]
-            current_pe = P0.values / current_eps.replace(0, np.nan)
-            # Insert Current PE after Current Margin (position 3)
-            edit_df.insert(3, "Current PE", current_pe)
-        except Exception:
-            pass
-        
-        # Add Implied CAGR as last column (calculated output)
-        edit_df["Implied CAGR"] = expected_returns
-        
-        # Column configuration for proper formatting and to disable calculated columns
-        # 🔒 indicates calculated/read-only columns
-        column_config = {
-            "Current Price": st.column_config.NumberColumn("Current Price", format="$%.2f", help="Current stock price"),
-            "Current PE": st.column_config.NumberColumn("🔒 Current PE", format="%.1f", disabled=True, help="Calculated: Price / EPS (not editable)"),
-            "Sales/Share": st.column_config.NumberColumn("Sales/Share", format="$%.2f", help="Sales per share (TTM)"),
-            "Current Margin": st.column_config.NumberColumn("Current Margin", format="%.4f", min_value=-1.0, max_value=1.0, help="Current net profit margin (decimal)"),
-            "Target Margin": st.column_config.NumberColumn("Target Margin", format="%.4f", min_value=-1.0, max_value=1.0, help="Expected margin at exit (decimal)"),
-            "Adjusted Growth Rate": st.column_config.NumberColumn("Growth Rate", format="%.4f", min_value=-1.0, max_value=2.0, help="Annual sales growth rate (decimal)"),
-            "Exit PE": st.column_config.NumberColumn("Exit PE", format="%.1f", min_value=0, help="Expected P/E ratio at exit"),
-            "Implied CAGR": st.column_config.NumberColumn("🔒 Implied CAGR", format="%.4f", disabled=True, help="Calculated implied return (not editable)"),
-        }
-        
-        # Compact header with sort control
-        cols = st.columns([3, 1])
-        with cols[0]:
-            st.markdown("### Edit Assumptions")
-        with cols[1]:
-            sort_options = ["↓ Ticker", "↑ Ticker"] + [f"↓ {col}" for col in edit_df.columns] + [f"↑ {col}" for col in edit_df.columns]
-            sort_by = st.selectbox("Sort", sort_options, label_visibility="collapsed")
-        
-        # Apply sorting (↓ = ascending/A→Z, ↑ = descending/Z→A)
-        if sort_by == "↓ Ticker":
-            edit_df = edit_df.sort_index(ascending=True)
-        elif sort_by == "↑ Ticker":
-            edit_df = edit_df.sort_index(ascending=False)
-        elif sort_by.startswith("↓ "):
-            col_name = sort_by[2:]
-            if col_name in edit_df.columns:
-                edit_df = edit_df.sort_values(by=col_name, ascending=True)
-        elif sort_by.startswith("↑ "):
-            col_name = sort_by[2:]
-            if col_name in edit_df.columns:
-                edit_df = edit_df.sort_values(by=col_name, ascending=False)
-        
-        edited_df = st.data_editor(
-            edit_df,
-            column_config=column_config,
-            width="stretch",
-            key="fundamentals_editor"
-        )
-        
-        # Sync edits back to session state (update the original fundamentals)
-        editable_cols = ["Current Price", "Sales/Share", "Current Margin", "Target Margin", "Adjusted Growth Rate", "Exit PE"]
-        original_vals = funds_aligned[editable_cols]
-        edited_vals = edited_df[editable_cols]
-        
-        if not original_vals.equals(edited_vals):
-            # Update session state fundamentals with edited values
-            for col in editable_cols:
-                st.session_state['fundamentals'].loc[edited_df.index, col] = edited_df[col]
-            st.toast("Changes saved! Re-run optimization to apply.", icon="✅")
-            st.rerun()
-        
-        # Export functionality
-        from datetime import datetime
-        
-        def convert_df_to_csv(df: pd.DataFrame) -> bytes:
-            return df.to_csv().encode('utf-8')
-        
-        csv_data = convert_df_to_csv(edited_df)
-        filename = f"fundamentals_{datetime.now().strftime('%Y%m%d_%H%M')}.csv"
-        
-        st.download_button(
-            label="📥 Export CSV",
-            data=csv_data,
-            file_name=filename,
-            mime="text/csv",
-            help="Download your forecasts"
-        )
-        
-        # Margin Interpolation Display
-        with st.expander("📈 Margin Trajectory (Linear Interpolation)", expanded=False):
-            st.caption(f"Shows the assumed linear progression from Current Margin to Target Margin over {investment_horizon} years.")
-            
-            # Create interpolation data
-            years = list(range(investment_horizon + 1))
-            margin_data = []
-            
-            for ticker in edited_df.index:
-                current = edited_df.loc[ticker, "Current Margin"]
-                target = edited_df.loc[ticker, "Target Margin"]
-                for year in years:
-                    # Linear interpolation: M_t = M_0 + (M_N - M_0) * (t / N)
-                    margin_t = current + (target - current) * (year / investment_horizon)
-                    margin_data.append({"Ticker": ticker, "Year": year, "Margin": margin_t})
-            
-            margin_df = pd.DataFrame(margin_data)
-            
-            # Create chart
-            margin_chart = alt.Chart(margin_df).mark_line(point=True).encode(
-                x=alt.X("Year:O", title="Year", axis=alt.Axis(labelAngle=0)),
-                y=alt.Y("Margin:Q", title="Net Margin", axis=alt.Axis(format=".1%")),
-                color="Ticker:N",
-                tooltip=[
-                    "Ticker",
-                    "Year",
-                    alt.Tooltip("Margin:Q", format=".2%", title="Net Margin")
-                ]
-            ).properties(height=300).interactive()
-            
-            st.altair_chart(margin_chart, width="stretch")
-
-        # 5. Optimize
-        if st.button("Run Optimization"):
-            result = optimizer.optimize_portfolio(
-                expected_returns=expected_returns,
-                cov_matrix=cov_matrix.values,
-                risk_free_rate=risk_free_rate,
-                max_weight=max_weight,
-            )
-
-            if result["success"]:
-                st.divider()
-                st.header("Optimal Portfolio")
-
-                # Metrics
-                m1, m2, m3 = st.columns(3)
-                m1.metric("Expected Return", f"{result['return']:.2%}")
-                m2.metric("Volatility", f"{result['volatility']:.2%}")
-                m3.metric("Sharpe Ratio", f"{result['sharpe']:.2f}")
-
-                # Weights
-                # Calculate volatility for each asset in the portfolio
-                asset_vols = np.sqrt(np.diag(cov_matrix.values))
-                
-                # Create comprehensive Portfolio Composition table
-                weights_df = pd.DataFrame(
-                    {
-                        "Ticker": tickers, 
-                        "Weight": result["weights"],
-                        "Implied Return": expected_returns,
-                        "Volatility": asset_vols
-                    }
-                ).sort_values(by="Weight", ascending=False)
-
-                # Filter out small weights
-                weights_df = weights_df[weights_df["Weight"] > 0.001]
-
-                # Portfolio Allocation: Simplified table (fundamentals already visible in edit table above)
-                st.subheader("Portfolio Allocation")
-                st.caption("Fundamentals are shown in the Edit Assumptions table above.")
-                
-                # Only show portfolio-specific columns: Weight, Return, Risk
-                comp_df = weights_df.set_index("Ticker")[["Weight", "Implied Return", "Volatility"]]
-                
-                # Format and display
-                st.dataframe(
-                    comp_df.style.format({
-                        "Weight": "{:.2%}",
-                        "Implied Return": "{:.2%}",
-                        "Volatility": "{:.2%}",
-                    }).background_gradient(cmap="Blues", subset=["Weight"])
-                    .background_gradient(cmap="RdYlGn", subset=["Implied Return"], vmin=-0.1, vmax=0.3),
-                    width="stretch"
+            ticker_list = [t.strip().upper() for t in tickers_input.split(",") if t.strip()]
+            with st.spinner("Downloading price history..."):
+                prices = fetch_prices_from_yfinance(
+                    ticker_list, 
+                    period=lookback_period, 
+                    interval=interval_map[data_interval]
                 )
-
-                # --- Efficient Frontier Plot ---
-                
-                # 1. Calculate Frontier
-                frontier_data = optimizer.calculate_efficient_frontier(expected_returns, cov_matrix.values, num_points=50)
-                
-                # 2. Generate Random Portfolios (Feasible Set)
-                # We pass a copy of frontier data to the generator if needed, but the generator doesn't modify it in place
-                # so we can just pass it.
-                random_portfolios = optimizer.generate_random_portfolios(
-                    1500, 
-                    expected_returns, 
-                    cov_matrix.values,
-                    frontier_points=frontier_data
-                )
-
-
-                combined_chart = charts.plot_efficient_frontier(
-                    frontier_points=frontier_data,
-                    random_portfolios=random_portfolios,
-                    optimal_portfolio=result,
-                    tickers=tickers,
-                    asset_returns=expected_returns,
-                    asset_vols=asset_vols
-                )
-                
-                st.altair_chart(combined_chart, width="stretch")
-
-            else:
-                st.error(f"Optimization failed: {result['message']}")
-
-    except Exception as e:
-        st.error(f"Error processing fundamental data: {e}")
-        st.exception(e)
-
-if not price_file:
-    st.info("Please upload Price History CSV to begin.")
-
-    with st.expander("See Expected CSV Formats"):
+                st.session_state['prices'] = prices
+                st.success(f"Successfully fetched {len(prices.columns)} assets.")
+                st.rerun()
+        except Exception as e:
+            st.error(f"Error: {e}")
+else: # Upload CSV
+    with st.expander("ℹ️ CSV Format Guide"):
         st.markdown("""
-        **Price History CSV:**
-        *   Index: Date
-        *   Columns: Tickers
-        *   Values: Adjusted Close Prices
-        
-        **Fundamentals CSV:**
-        *   Index: Ticker
-        *   Columns: `Sales/Share`, `Current Margin`, `Target Margin`, `Adjusted Growth Rate`, `Exit PE`, `Current Price` (Optional)
+        **Expected Format**:
+        - **Column 1**: Date (YYYY-MM-DD)
+        - **Other Columns**: Ticker names with price history.
         """)
+    price_file = st.file_uploader("Upload Price History (CSV)", type=["csv"])
+    if price_file:
+        try:
+            st.session_state['prices'] = load_and_validate_prices(price_file)
+            st.rerun()
+        except Exception as e:
+            st.error(f"Error: {e}")
+
+if st.session_state['prices'] is not None:
+    with st.expander("📊 View Asset Correlations"):
+        corr = st.session_state['prices'].pct_change().corr()
+        st.dataframe(
+            corr.style.background_gradient(cmap='RdYlGn', axis=None, vmin=-1, vmax=1)
+            .format("{:.2f}"), 
+            width="stretch"
+        )
+
+st.markdown("---")
+st.subheader("Bulk Upload Metrics")
+with st.expander("ℹ️ Metrics CSV Format Guide"):
+    st.markdown("""
+    **Expected Format**:
+    - **Ticker**: (Index) e.g., AAPL
+    - **Implied Volatility**: e.g., 0.25
+    - **Custom Return**: e.g., 0.10
+    - **Constraint**: 'Long', 'Short', or 'Both'
+    """)
+
+metrics_file = st.file_uploader("Upload Asset Metrics (CSV)", type=["csv"])
+if metrics_file:
+    try:
+        metrics_df = load_and_validate_asset_metrics(metrics_file)
+        if st.session_state['prices'] is not None:
+            common = st.session_state['prices'].columns.intersection(metrics_df.index)
+            if not common.empty:
+                st.session_state['metrics'] = metrics_df.loc[common]
+                st.success(f"Loaded metrics for {len(common)} assets.")
+                st.rerun()
+            else:
+                st.warning("No common tickers between Price data and Metrics CSV.")
+        else:
+            st.session_state['metrics'] = metrics_df
+            st.success(f"Loaded metrics for {len(metrics_df)} assets.")
+            st.rerun()
+    except Exception as e:
+        st.error(f"Error: {e}")
+
+if st.session_state['prices'] is not None:
+    tickers = st.session_state['prices'].columns.tolist()
+    
+    if st.session_state['metrics'] is None or list(st.session_state['metrics'].index) != tickers:
+        st.session_state['metrics'] = pd.DataFrame({
+            "Constraint": ["Long"] * len(tickers),
+            "Alpha Delta (%)": [0.0] * len(tickers),
+            "Implied Volatility (%)": [30.0] * len(tickers),
+            "Custom Return (%)": [8.0] * len(tickers)
+        }, index=tickers)
+
+# Handled in Steps 2 & 3
+
+    # --- Step 2: Generate Returns ---
+    st.markdown("---")
+    st.header("Step 2: Generate Returns")
+    
+    col_ret1, col_ret2 = st.columns([2, 1])
+    with col_ret1:
+        ret_method = st.radio(
+            "Return Generation Method", 
+            ["View Alpha", "Custom", "Fundamental"], 
+            horizontal=True,
+            label_visibility="collapsed"
+        )
+    
+    if ret_method == "View Alpha":
+        with col_ret2:
+            market_baseline = st.slider("Market Baseline (%)", 0.0, 20.0, 8.0, 0.5) / 100.0
+        
+        st.info(r"💡 **Logic**: $\mu = \mu_{market} + \delta_{alpha}$. Set Alpha Deltas below.")
+        
+        # Specific editor for Alpha
+        alpha_editor = st.data_editor(
+            st.session_state['metrics'][['Alpha Delta (%)', 'Constraint']],
+            column_config={
+                "Constraint": st.column_config.SelectboxColumn("Constraint", options=["Long", "Short", "Both"], required=True),
+                "Alpha Delta (%)": st.column_config.NumberColumn("Alpha Delta (%)", format="%.2f")
+            },
+            width="stretch",
+            key="alpha_editor"
+        )
+        st.session_state['metrics'].update(alpha_editor)
+        
+        expected_returns = calculate_view_returns(market_baseline, st.session_state['metrics']['Alpha Delta (%)'].values / 100.0)
+        
+    elif ret_method == "Custom":
+        st.info("💡 **Logic**: Provide raw expected returns below.")
+        custom_editor = st.data_editor(
+            st.session_state['metrics'][['Custom Return (%)', 'Constraint']],
+            column_config={
+                "Constraint": st.column_config.SelectboxColumn("Constraint", options=["Long", "Short", "Both"], required=True),
+                "Custom Return (%)": st.column_config.NumberColumn("Custom Return (%)", format="%.2f")
+            },
+            width="stretch",
+            key="custom_ret_editor"
+        )
+        st.session_state['metrics'].update(custom_editor)
+        expected_returns = st.session_state['metrics']['Custom Return (%)'].values / 100.0
+        
+    else:  # Fundamental Implied CAGR
+        st.warning("⚠️ **Fundamental Mode** (In Development)")
+        st.markdown("""
+        We are building a model to derive returns from:
+        - **Revenue Growth** & **Margin Expansion**
+        - **Current Valuation (P/E)** vs **Terminal P/E**
+        
+        *Expected release: Q1 2026. Defaulting to 8% for now.*
+        """)
+        expected_returns = np.full(len(tickers), 0.08)
+    
+    # --- Step 3: Calibrate Risk ---
+    st.markdown("---")
+    st.header("Step 3: Calibrate Risk")
+    
+    st.markdown("**Risk Calibration**")
+    col_r1, col_r2 = st.columns(2)
+    with col_r1:
+        market_iv = st.slider("Market Implied Volatility (VIX)", 0.0, 1.0, 0.20, 0.01, format="%.2f")
+    with col_r2:
+        blend_w = st.slider("IV Blending Weight (w)", 0.0, 1.0, 0.5, 0.05)
+    
+    st.info(f"Using {blend_w:.0%} Implied Vol / {1-blend_w:.0%} Historical Vol")
+
+    st.markdown("**Asset-Specific Implied Volatility**")
+    st.caption("ℹ️ *Blended Vol is auto-calculated based on Asset IV and Market IV.*")
+    
+    # Pre-calculate components for the table
+    detected_freq = infer_frequency(st.session_state['prices'])
+    hist_cov = calculate_covariance_matrix(st.session_state['prices'], detected_freq)
+    hist_vols = np.sqrt(np.diag(hist_cov))
+    
+    # Build a temp display dataframe
+    iv_display_df = st.session_state['metrics'][['Implied Volatility (%)']].copy()
+    iv_display_df['Blended Vol (%)'] = blend_w * iv_display_df['Implied Volatility (%)'] + (1 - blend_w) * (market_iv * 100.0)
+    
+    iv_editor = st.data_editor(
+        iv_display_df,
+        column_config={
+            "Implied Volatility (%)": st.column_config.NumberColumn("Asset IV (%)", format="%.2f", min_value=1.0),
+            "Blended Vol (%)": st.column_config.NumberColumn("Blended Vol (%)", format="%.2f", disabled=True)
+        },
+        width="stretch",
+        key="iv_editor"
+    )
+    # Update state only from the editable column
+    st.session_state['metrics']['Implied Volatility (%)'] = iv_editor['Implied Volatility (%)']
+
+    hybrid_cov = calculate_hybrid_covariance(
+        st.session_state['prices'],
+        st.session_state['metrics']['Implied Volatility (%)'].values / 100.0,
+        anchor_vols=market_iv,
+        w_iv=blend_w,
+        frequency=detected_freq
+    )
+    
+    with st.expander("View Hybrid Covariance Matrix"):
+        st.dataframe(
+            hybrid_cov.style.background_gradient(cmap='RdYlGn', axis=None)
+            .format("{:.4f}"), 
+            width="stretch"
+        )
+
+    # --- Step 4: Optimize ---
+    st.markdown("---")
+    st.header("Step 4: Optimize")
+    
+    col_o1, col_o2, col_o3 = st.columns(3)
+    with col_o1:
+        rf_rate = st.slider("Risk-Free Rate (%)", 0.0, 10.0, 4.0, 0.25) / 100.0
+    with col_o2:
+        max_long = st.slider("Global Max Long (%)", 0.0, 100.0, 100.0, 5.0) / 100.0
+    with col_o3:
+        max_short = st.slider("Global Max Short (%)", 0.0, 100.0, 20.0, 5.0) / 100.0
+    
+    # Map directional constraints to bounds, applying global caps
+    asset_bounds = []
+    for constraint in st.session_state['metrics']['Constraint']:
+        if constraint == "Long":
+            asset_bounds.append((0.0, max_long))
+        elif constraint == "Short":
+            asset_bounds.append((-max_short, 0.0))
+        else:
+            asset_bounds.append((-max_short, max_long))
+
+    if st.button("Run Optimization", type="primary"):
+        opt = optimizer.PortfolioOptimizer(
+            expected_returns=expected_returns,
+            cov_matrix=hybrid_cov.values,
+            risk_free_rate=rf_rate
+        )
+        
+        res = opt.maximize_sharpe(bounds=asset_bounds)
+        
+        if res.success:
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Expected Return", f"{res.return_:.2%}")
+            m2.metric("Volatility", f"{res.volatility:.2%}")
+            m3.metric("Sharpe Ratio", f"{res.sharpe_ratio:.2f}")
+            
+            # Prepare data for charts
+            # Need to convert PortfolioMetrics to dicts for plot_efficient_frontier
+            frontier = opt.efficient_frontier(bounds=asset_bounds, num_points=50)
+            frontier_dicts = [
+                {'return': p.return_, 'volatility': p.volatility, 'weights': p.weights} 
+                for p in frontier
+            ]
+            
+            random_ps = opt.random_portfolios(num_portfolios=1000)
+            random_dicts = [
+                {'return': p.return_, 'volatility': p.volatility, 'weights': p.weights} 
+                for p in random_ps
+            ]
+            
+            opt_dict = {
+                'return': res.return_, 
+                'volatility': res.volatility, 
+                'weights': res.weights, 
+                'sharpe': res.sharpe_ratio
+            }
+            
+            asset_vols = np.sqrt(np.diag(hybrid_cov.values))
+            
+            chart = charts.plot_efficient_frontier(
+                frontier_points=frontier_dicts,
+                random_portfolios=random_dicts,
+                optimal_portfolio=opt_dict,
+                tickers=tickers,
+                asset_returns=expected_returns,
+                asset_vols=asset_vols,
+                rf_rate=rf_rate
+            )
+            
+            st.altair_chart(chart, width="stretch")
+            
+            # Allocation Table
+            st.subheader("Allocation Table")
+            alloc_df = pd.DataFrame({
+                "Weight": res.weights,
+                "Expected Return": expected_returns,
+                "Volatility": asset_vols
+            }, index=tickers)
+            
+            # Add Cash/Risk-Free asset row if needed
+            cash_weight = 1.0 - sum(res.weights)
+            if abs(cash_weight) > 0.001:
+                cash_row = pd.DataFrame({
+                    "Weight": [cash_weight],
+                    "Expected Return": [rf_rate],
+                    "Volatility": [0.0]
+                }, index=["CASH (RF)"])
+                alloc_df = pd.concat([alloc_df, cash_row])
+            
+            alloc_df = alloc_df.sort_values("Weight", ascending=False)
+            
+            st.dataframe(
+                alloc_df.style.format("{:.2%}")
+                .background_gradient(cmap="RdYlGn", subset=["Weight"], vmin=-1.0, vmax=1.0),
+                width="stretch"
+            )
+        else:
+            st.error(f"Optimization failed: {res.message}")
+
+# Handled above
+st.markdown("---")
+st.markdown(
+    "<div style='text-align: center; color: #666; font-size: 0.8rem;'>"
+    "Hybrid Quantamental Optimizer &copy; 2025 | Built for Precision and Insight"
+    "</div>", 
+    unsafe_allow_html=True
+)

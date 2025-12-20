@@ -22,7 +22,6 @@ from src.optimization.optimizer import (
     optimize_portfolio,
     PortfolioMetrics,
 )
-from src.core.returns import calculate_implied_cagr
 
 
 # ============================================================================
@@ -173,7 +172,9 @@ class TestConstrainedOptimization:
     def test_concentration_limit(self, optimizer_uncorrelated):
         """Max weight constraint should be respected."""
         max_weight = 0.25
-        portfolio = optimizer_uncorrelated.maximize_sharpe(max_weight=max_weight)
+        # Convert max_weight to per-asset bounds
+        bounds = [(0.0, max_weight) for _ in range(5)]
+        portfolio = optimizer_uncorrelated.maximize_sharpe(bounds=bounds)
         
         assert portfolio.success
         assert np.all(portfolio.weights <= max_weight + 1e-6)
@@ -197,12 +198,32 @@ class TestConstrainedOptimization:
         optimizer = PortfolioOptimizer(returns, cov, risk_free_rate=0.02)
         
         # 5 assets × 0.15 max = 0.75 < 1.0 required (infeasible)
-        portfolio = optimizer.maximize_sharpe(max_weight=0.15)
+        bounds = [(0.0, 0.15) for _ in range(5)]
+        portfolio = optimizer.maximize_sharpe(bounds=bounds)
         
         # Optimizer may fail or find best constrained solution
         # Either way, shouldn't crash and weights should respect bounds
         if portfolio.success:
             assert np.all(portfolio.weights <= 0.15 + 1e-6)
+
+    def test_short_selling_allowed(self):
+        """Test that optimizer handles short selling when bounds allow it."""
+        # Scenario: High return asset and asset with return < risk-free rate
+        # Strategy: Short the asset with negative excess return to leverage the better one.
+        returns = np.array([0.15, 0.01])
+        vols = np.array([0.20, 0.10])
+        cov = np.diag(vols**2)
+        optimizer = PortfolioOptimizer(returns, cov, risk_free_rate=0.02)
+        
+        # Long asset 0 (+150%), short asset 1 (-50%). Sum = 1.0.
+        bounds = [(0.0, 1.5), (-0.5, 0.0)]
+        portfolio = optimizer.maximize_sharpe(bounds=bounds)
+        
+        assert portfolio.success
+        assert np.isclose(np.sum(portfolio.weights), 1.0)
+        assert portfolio.weights[1] < -0.1  # Should short the lower return asset
+        assert np.all(portfolio.weights >= -0.5 - 1e-6)
+        assert np.all(portfolio.weights <= 1.5 + 1e-6)
 
 
 # ============================================================================
@@ -429,73 +450,16 @@ class TestDegenerateInputs:
 # Test CAGR Calculations (Domain-Specific)
 # ============================================================================
 
-class TestCAGRCalculations:
-    """Test CAGR calculation edge cases."""
-    
-    def test_negative_target_margin_produces_invalid_cagr(self):
-        """Negative exit margin should result in -100% CAGR."""
-        cagr = calculate_implied_cagr(
-            current_price=100,
-            sales_per_share=10,
-            net_margin_current=0.1,
-            net_margin_target=-0.2,
-            adjusted_growth_rate=0.1,
-            exit_pe=20,
-            years=5,
-        )
-        assert cagr == -1.0
-    
-    def test_zero_sales_produces_invalid_cagr(self):
-        """Pre-revenue company with zero sales should fail gracefully."""
-        cagr = calculate_implied_cagr(
-            current_price=100,
-            sales_per_share=0,
-            net_margin_current=0,
-            net_margin_target=0.2,
-            adjusted_growth_rate=0.5,
-            exit_pe=30,
-            years=5,
-        )
-        assert cagr == -1.0
-    
-    def test_invalid_inputs_raise_errors(self):
-        """Zero or negative price/years should raise ValueError."""
-        with pytest.raises(ValueError, match="positive"):
-            calculate_implied_cagr(
-                current_price=0,
-                sales_per_share=10,
-                net_margin_current=0.1,
-                net_margin_target=0.2,
-                adjusted_growth_rate=0.1,
-                exit_pe=20,
-                years=5,
-            )
-        
-        with pytest.raises(ValueError, match="positive"):
-            calculate_implied_cagr(
-                current_price=100,
-                sales_per_share=10,
-                net_margin_current=0.1,
-                net_margin_target=0.2,
-                adjusted_growth_rate=0.1,
-                exit_pe=20,
-                years=0,
-            )
-
-
-# ============================================================================
-# Test Convenience Function
-# ============================================================================
-
 def test_convenience_function_maintains_compatibility(uncorrelated_assets):
     """Convenience function should provide simple API for common use case."""
     returns, cov, _ = uncorrelated_assets
     
+    bounds = [(0.0, 0.3) for _ in range(5)]
     portfolio = optimize_portfolio(
         returns,
         cov,
         risk_free_rate=0.02,
-        max_weight=0.3
+        bounds=bounds
     )
     
     assert isinstance(portfolio, PortfolioMetrics)
