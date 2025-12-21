@@ -20,7 +20,6 @@ import numpy.typing as npt
 from typing import Dict, Tuple, Optional, List
 
 # Constants
-MIN_WEIGHT_THRESHOLD = 0.001  # Minimum weight to display (0.1%)
 ZERO_VOL_THRESHOLD = 1e-8      # Numerical zero for volatility checks
 MIN_SHARPE_DENOMINATOR = 1e-6  # Minimum volatility for Sharpe calculation
 
