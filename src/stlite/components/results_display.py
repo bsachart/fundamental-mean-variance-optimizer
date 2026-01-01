@@ -246,8 +246,20 @@ def _create_chart(
         )
     )
 
+    # Reference lines at origin (visible when panning)
+    x_zero = (
+        alt.Chart(pd.DataFrame({"x": [0]}))
+        .mark_rule(color="gray", strokeDash=[4, 4])
+        .encode(x="x:Q")
+    )
+    y_zero = (
+        alt.Chart(pd.DataFrame({"y": [0]}))
+        .mark_rule(color="gray", strokeDash=[4, 4])
+        .encode(y="y:Q")
+    )
+
     return (
-        (frontier + cml + assets + sharpe + target)
+        (x_zero + y_zero + frontier + cml + assets + sharpe + target)
         .properties(title="Efficient Frontier & Capital Market Line", height=500)
         .interactive()
     )
