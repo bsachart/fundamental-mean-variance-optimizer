@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hybrid Quantamental Optimizer</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@stlite/mountable@0.57.0/build/stlite.css">
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+
+    #root {
+      width: 100%;
+      height: 100vh;
+    }
+
+    .loading {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      font-size: 1.2rem;
+      color: #666;
+    }
+  </style>
+</head>
+
+<body>
+  <div id="root">
+    <div class="loading">Loading Portfolio Optimizer...</div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@stlite/mountable@0.57.0/build/stlite.js"></script>
+  <script>
+    stlite.mount(
+      {
+        requirements: [
+          "polars==0.20.3",
+          "pandas==2.1.4",
+          "numpy==1.26.2",
+          "scipy==1.11.4",
+          "altair==5.2.0"
+        ],
+        entrypoint: "streamlit_app.py",
+        files: {
+          // Main app
+          "streamlit_app.py": {
+            url: "./streamlit_app.py"
+          },
+
+          // UI Components
+          "components/__init__.py": {
+            url: "./components/__init__.py"
+          },
+          "components/uploader.py": {
+            url: "./components/uploader.py"
+          },
+          "components/optimizer_panel.py": {
+            url: "./components/optimizer_panel.py"
+          },
+          "components/results_display.py": {
+            url: "./components/results_display.py"
+          },
+
+          // Engine modules
+          "src/__init__.py": {
+            url: "../src/__init__.py"
+          },
+          "src/engine/__init__.py": {
+            url: "../src/engine/__init__.py"
+          },
+          "src/engine/data_loader.py": {
+            url: "../src/engine/data_loader.py"
+          },
+          "src/engine/portfolio_engine.py": {
+            url: "../src/engine/portfolio_engine.py"
+          },
+          "src/engine/optimizer.py": {
+            url: "../src/engine/optimizer.py"
+          },
+          "src/engine/risk.py": {
+            url: "../src/engine/risk.py"
+          }
+        }
+      },
+      document.getElementById("root")
+    );
+  </script>
+</body>
+
+</html>

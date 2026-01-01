@@ -31,4 +31,5 @@ data/uploads/*.csv
 *.log
 .ruff_cache/
 tmp/
+src/legacy
 codebase_snapshot.txt
