@@ -76,24 +76,17 @@ def _load_prices(source: FileInput) -> pd.DataFrame:
     df = _read_df(source)
 
     # Normalize 'date' column
-    # We look for a column that contains 'date'
     date_col = next((c for c in df.columns if "date" in c), None)
-
     if not date_col:
-        # Fallback: assume first column is date
         date_col = df.columns[0]
-
     df = df.rename(columns={date_col: "date"})
 
-    # FIX: Ensure all columns are LOWERCASE
-    # _read_df usually handles this, but we explicitly enforce it here
-    # to guarantee alignment with metrics.
-    df.columns = [c.lower() for c in df.columns]
+    # CRITICAL: Ensure all ticker columns are LOWERCASE to match metrics
+    # This must happen BEFORE we use the columns for any logic
+    df.columns = [c.lower() if c != "date" else c for c in df.columns]
 
     # Convert date column
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
-
-    # Drop rows with invalid dates
     df = df.dropna(subset=["date"])
 
     # Convert all ticker columns to numeric
@@ -101,7 +94,7 @@ def _load_prices(source: FileInput) -> pd.DataFrame:
         if col != "date":
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
-    # Forward fill then Backward fill to handle missing prices (Define errors out of existence)
+    # Forward fill then Backward fill
     df = df.sort_values("date").ffill().bfill()
 
     return df
