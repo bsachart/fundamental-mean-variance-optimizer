@@ -1,9 +1,8 @@
 """
-Portfolio Optimizer - Mean-Variance Optimization engine.
+Portfolio Optimizer - Mean-Variance Optimization using scipy.
 
-Philosophy:
-    - Pure Solver: Wraps scipy.optimize to solve mathematical objectives.
-    - Explicit Inputs: No default risk-free rates.
+Solves for the Maximum Sharpe Ratio (Tangency) portfolio given
+expected returns, covariance matrix, and weight constraints.
 """
 
 import numpy as np

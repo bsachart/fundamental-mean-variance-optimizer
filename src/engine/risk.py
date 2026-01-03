@@ -1,9 +1,9 @@
 """
 Risk modeling: Covariance matrix construction.
 
-Philosophy:
-    - Deep Module: Hides linear algebra and scaling logic.
-    - Explicit Inputs: No magic numbers for scaling.
+Supports two models:
+    - HISTORICAL: Scaled sample covariance from returns
+    - FORWARD_LOOKING: Historical correlation + implied volatilities
 """
 
 import polars as pl

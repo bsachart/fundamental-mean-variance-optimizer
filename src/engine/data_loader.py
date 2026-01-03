@@ -1,3 +1,9 @@
+"""
+Data loader for portfolio universe (Polars version).
+
+Loads and aligns price history and asset metrics into a unified Universe.
+"""
+
 import polars as pl
 from typing import Union, List, Set
 from pathlib import Path
@@ -23,9 +29,6 @@ class DataValidationError(Exception):
 def load_universe(price_source: FileInput, metric_source: FileInput) -> Universe:
     """
     Load and align price and metric data into a unified portfolio universe.
-
-    Deep Module: Handles file I/O, column normalization, type casting,
-    and data alignment through a single call.
     """
     prices = _load_prices(price_source)
     metrics = _load_metrics(metric_source)
@@ -47,9 +50,7 @@ def load_universe(price_source: FileInput, metric_source: FileInput) -> Universe
     )
 
 
-# ==============================================================================
-# Internal Implementation (Information Hiding)
-# ==============================================================================
+# --- Internal Helpers ---
 
 
 def _read_df(source: FileInput) -> pl.DataFrame:
@@ -90,7 +91,7 @@ def _load_prices(source: FileInput) -> pl.DataFrame:
 
     df = df.rename({df.columns[0]: "date"})
 
-    # Define Errors Out of Existence: Force types rather than checking them
+    # Force types
     return df.with_columns(
         [
             pl.col("date").cast(pl.Date),
@@ -116,7 +117,7 @@ def _load_metrics(source: FileInput) -> pl.DataFrame:
     if missing:
         raise DataValidationError(f"Metrics missing required columns: {missing}")
 
-    # Process and provide defaults for weights (Defining errors out of existence)
+    # Provide defaults for weights
     df = df.with_columns(
         [
             pl.col("expected_return").cast(pl.Float64),
@@ -131,7 +132,7 @@ def _load_metrics(source: FileInput) -> pl.DataFrame:
         ]
     )
 
-    # Validation logic (Strategic Programming)
+    # Validation
     if (df["implied_volatility"] <= 0).any():
         raise DataValidationError("Implied volatility must be positive.")
 

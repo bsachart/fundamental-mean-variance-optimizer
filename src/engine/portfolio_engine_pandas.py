@@ -1,11 +1,9 @@
 """
 Portfolio Engine - Pandas version for browser deployment.
 
-Philosophy:
-    - Deep Module: Simple public API hiding complex data loading and math.
-    - Two-Stage Process:
-        1. optimize_portfolio: Finds the optimal risky mix (Tangency).
-        2. target_portfolio: Scales that mix to desired risk (Capital Market Line).
+Two-stage portfolio construction:
+    1. optimize_portfolio: Finds the optimal risky mix (Tangency Portfolio).
+    2. target_portfolio: Scales that mix to desired risk via Capital Market Line.
 """
 
 import numpy as np
@@ -14,11 +12,9 @@ from typing import Union, List, Optional, cast
 from src.engine.data_loader_pandas import load_universe, FileInput
 from src.engine.risk_pandas import calculate_covariance, RiskModel
 
-# FIX: Import only PortfolioMetrics (base), not LabeledPortfolioMetrics
 from src.engine.optimizer import find_tangency_portfolio, PortfolioMetrics
 
 
-# FIX: Define LabeledPortfolioMetrics here (Domain Concern), not in the Optimizer (Math Concern).
 class LabeledPortfolioMetrics(PortfolioMetrics):
     """
     Extends standard metrics to include universe context (tickers, stats).
@@ -37,9 +33,9 @@ def optimize_portfolio(
     annualization_factor: Optional[int] = None,
 ) -> LabeledPortfolioMetrics:
     """
-    Step 1: The Heavy Lifter.
-    Loads data, builds the risk model, finds the Tangency Portfolio,
-    and extracts universe statistics in a single pass.
+    Find the Tangency Portfolio (Maximum Sharpe Ratio).
+
+    Loads data, builds the risk model, and returns the optimal risky portfolio.
 
     Args:
         price_source: Path to CSV or Pandas DataFrame (Prices).
@@ -87,8 +83,7 @@ def optimize_portfolio(
     # 5. Extract Universe Statistics (for UI Visualization)
     asset_vols = np.sqrt(np.diag(cov_matrix))
 
-    # 6. Inject Labels and Context
-    # We create a new dict that satisfies LabeledPortfolioMetrics
+    # Build result with asset context
     result: LabeledPortfolioMetrics = {
         "weights": raw_metrics["weights"],
         "expected_return": raw_metrics["expected_return"],
@@ -109,9 +104,9 @@ def target_portfolio(
     risk_free_rate: float,
 ) -> Union[LabeledPortfolioMetrics, List[LabeledPortfolioMetrics]]:
     """
-    Step 2: The Constructor.
-    Scales the Tangency Portfolio along the Capital Market Line (CML).
-    Preserves universe context (tickers, returns, vols) in the output.
+    Scale the Tangency Portfolio along the Capital Market Line (CML).
+
+    Returns a portfolio at the specified volatility level.
     """
     # Vectorized handling for List inputs
     if isinstance(target_volatility, list):

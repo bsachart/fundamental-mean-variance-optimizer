@@ -1,11 +1,9 @@
 """
 Portfolio Engine - High-level orchestration for portfolio construction.
 
-Philosophy:
-    - Deep Module: Simple public API hiding complex data loading and math.
-    - Two-Stage Process:
-        1. optimize_portfolio: Finds the optimal risky mix (Tangency).
-        2. target_portfolio: Scales that mix to desired risk (Capital Market Line).
+Two-stage portfolio construction:
+    1. optimize_portfolio: Finds the optimal risky mix (Tangency Portfolio).
+    2. target_portfolio: Scales that mix to desired risk via Capital Market Line.
 """
 
 import numpy as np
@@ -16,7 +14,6 @@ from src.engine.risk import calculate_covariance, RiskModel
 from src.engine.optimizer import find_tangency_portfolio, PortfolioMetrics
 
 
-# Define LabeledPortfolioMetrics here (Domain Concern), not in the Optimizer (Math Concern).
 class LabeledPortfolioMetrics(PortfolioMetrics):
     """
     Extends standard metrics to include universe context (tickers, stats).
@@ -35,9 +32,9 @@ def optimize_portfolio(
     annualization_factor: Optional[int] = None,
 ) -> LabeledPortfolioMetrics:
     """
-    Step 1: The Heavy Lifter.
-    Loads data, builds the risk model, finds the Tangency Portfolio,
-    and extracts universe statistics in a single pass.
+    Find the Tangency Portfolio (Maximum Sharpe Ratio).
+
+    Loads data, builds the risk model, and returns the optimal risky portfolio.
 
     Args:
         price_source: Path to CSV or Polars DataFrame (Prices).
@@ -102,9 +99,9 @@ def target_portfolio(
     risk_free_rate: float,
 ) -> Union[LabeledPortfolioMetrics, List[LabeledPortfolioMetrics]]:
     """
-    Step 2: The Constructor.
-    Scales the Tangency Portfolio along the Capital Market Line (CML).
-    Preserves universe context (tickers, returns, vols) in the output.
+    Scale the Tangency Portfolio along the Capital Market Line (CML).
+
+    Returns a portfolio at the specified volatility level.
     """
     # Vectorized handling for List inputs
     if isinstance(target_volatility, list):

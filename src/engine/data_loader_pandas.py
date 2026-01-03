@@ -1,11 +1,7 @@
 """
-Pandas-compatible data loader for browser deployment.
+Data loader for portfolio universe (Pandas version for browser deployment).
 
-Philosophy (Ousterhout):
-- Deep Module: Handles file I/O, column normalization, type casting,
-  and data alignment through a single simple interface (load_universe).
-- Define Errors Out of Existence: Automatically cleans and coerces types
-  instead of raising unnecessary format errors.
+Loads and aligns price history and asset metrics into a unified Universe.
 """
 
 import pandas as pd
